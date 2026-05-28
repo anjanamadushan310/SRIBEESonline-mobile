@@ -1,0 +1,65 @@
+# =============================================================================
+# SRIBEESonline — Flutter Android APK Builder
+#
+# Triggers on push of tags (e.g. v1.0.0) or can be triggered manually via
+# the GitHub Actions "Run workflow" button.
+#
+# Outputs:
+#   Downloadable 'app-release.apk' run artifact
+# =============================================================================
+
+name: Build Flutter Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  build:
+    name: Build Android Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java Development Kit (JDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter & Environment
+        run: flutter doctor -v
+
+      - name: Fetch Flutter Dependencies
+        run: |
+          cd mobile
+          flutter pub get
+
+      # Uncomment the block below if you need code generation (e.g. build_runner for freezed)
+      - name: Run Build Runner / Code Generation
+        run: |
+          cd mobile
+          flutter pub run build_runner build --delete-conflicting-outputs || echo "Proceeding without build_runner..."
+
+      - name: Build Release APK
+        run: |
+          cd mobile
+          flutter build apk --release
+
+      - name: Upload APK Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sribeesonline-app-release
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
+          if-no-files-found: error
