@@ -10,18 +10,32 @@ import 'app_config.dart';
 
 class SentryService {
   static bool _isInitialized = false;
-  
+
+  /// A DSN is only usable if it is non-empty and not one of the committed
+  /// placeholder values. Placeholder DSNs point at the Sentry web host and
+  /// trigger CSRF 403 responses instead of ingesting events.
+  static bool _isValidDsn(String dsn) {
+    if (dsn.isEmpty) return false;
+    if (dsn.contains('your-') || dsn.contains('sentry.io/project')) return false;
+    return true;
+  }
+
   /// Initialize Sentry with app configuration
   /// Call this in main() before runApp()
   static Future<void> initialize({
     required Function() appRunner,
   }) async {
     final dsn = AppConfig.instance.sentryDsn;
-    
-    // Skip Sentry in development or if DSN not configured
-    if (dsn.isEmpty || AppConfig.isDevelopment) {
+
+    // Only enable Sentry in RELEASE builds with a real, fully-configured DSN.
+    // This kills the "CSRF Validation Failed / response code 403" log spam that
+    // happens when a placeholder DSN (e.g. https://your-*-dsn@sentry.io/project)
+    // is POSTed to the Sentry website instead of a real ingest endpoint, and it
+    // keeps local debug/profile runs completely free of Sentry network traffic.
+    if (!kReleaseMode || !_isValidDsn(dsn)) {
       if (kDebugMode) {
-        print('Sentry: Skipping initialization (development mode or no DSN)');
+        print('Sentry: Skipping initialization '
+            '(non-release build or DSN not configured)');
       }
       appRunner();
       return;

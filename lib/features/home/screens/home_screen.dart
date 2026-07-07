@@ -507,7 +507,11 @@ class _BannerSlide extends StatelessWidget {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+          // Vertical padding trimmed from 22/20 to 18/18 to reclaim headroom:
+          // the fixed 160px banner left only 118px for this Column, which the
+          // 2-line title + subtitle + button exceeded by ~2px (RenderFlex
+          // bottom overflow). 18/18 leaves a comfortable margin.
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -515,6 +519,10 @@ class _BannerSlide extends StatelessWidget {
                 width: 200,
                 child: Text(
                   banner.title,
+                  // Cap at 2 lines so longer marketing copy can never grow the
+                  // Column past the fixed banner height and re-trigger overflow.
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 27,
