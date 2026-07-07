@@ -99,8 +99,7 @@ class AuthRepository {
   Future<AuthResult> register({
     required String email,
     required String password,
-    required String firstName,
-    required String lastName,
+    required String fullName,
     required String phone,
   }) async {
     final res = await _api.post<Map<String, dynamic>>(
@@ -108,7 +107,7 @@ class AuthRepository {
       data: {
         'email': email,
         'password': password,
-        'full_name': '$firstName $lastName'.trim(),
+        'full_name': fullName.trim(),
         if (phone.isNotEmpty) 'phone': phone,
       },
     );
@@ -137,16 +136,15 @@ class AuthRepository {
     );
   }
 
-  /// PATCH /auth/me or PUT profile
+  /// PATCH /auth/me — only send changed fields. Name is a single `full_name`
+  /// field, matching the backend `users.full_name` column.
   Future<User> updateProfile({
-    String? firstName,
-    String? lastName,
+    String? fullName,
     String? phone,
     String? avatarUrl,
   }) async {
     final data = <String, dynamic>{};
-    if (firstName != null) data['first_name'] = firstName;
-    if (lastName != null) data['last_name'] = lastName;
+    if (fullName != null) data['full_name'] = fullName.trim();
     if (phone != null) data['phone'] = phone;
     if (avatarUrl != null) data['profile_picture_url'] = avatarUrl;
     final res = await _api.patch<Map<String, dynamic>>('/auth/me', data: data);

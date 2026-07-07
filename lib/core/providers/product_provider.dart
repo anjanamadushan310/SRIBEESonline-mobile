@@ -167,6 +167,41 @@ final productDetailProvider =
 });
 
 // =============================================================================
+// Product Reviews
+// =============================================================================
+
+/// Paginated reviews + rating summary for a product (first page).
+final productReviewsProvider =
+    FutureProvider.family<ProductReviewsResult, String>((ref, productId) async {
+  final repository = ref.watch(productRepositoryProvider);
+  return repository.getProductReviews(productId);
+});
+
+// =============================================================================
+// Home "Quick Sale" feed  (GET /products/home-feed)
+// =============================================================================
+
+final quickSaleProductsProvider = FutureProvider<List<Product>>((ref) async {
+  final repository = ref.watch(productRepositoryProvider);
+  return repository.getHomeFeed(limit: 20);
+});
+
+// =============================================================================
+// Search  (GET /products/search)
+// =============================================================================
+
+/// Debounced-by-caller search results for a query. Returns [] for queries
+/// shorter than 2 characters so we don't spam the API on every keystroke.
+final searchProductsProvider =
+    FutureProvider.family<List<Product>, String>((ref, query) async {
+  final trimmed = query.trim();
+  if (trimmed.length < 2) return const [];
+  final repository = ref.watch(productRepositoryProvider);
+  final result = await repository.searchProducts(query: trimmed);
+  return result.products;
+});
+
+// =============================================================================
 // Search Providers
 // =============================================================================
 
@@ -263,4 +298,24 @@ class RecentlyViewedNotifier extends StateNotifier<List<Product>> {
   void clear() {
     state = [];
   }
+}
+
+// =============================================================================
+// Branch-scoped invalidation
+// =============================================================================
+
+/// Invalidate every product/catalog provider whose data is scoped to the
+/// active branch. Call this immediately after the delivery location changes
+/// (POST /session/set-location) so no stale cross-branch catalog/prices survive
+/// the switch. Family providers are invalidated wholesale (all instances).
+void invalidateBranchScopedProducts(WidgetRef ref) {
+  ref.invalidate(quickSaleProductsProvider);
+  ref.invalidate(featuredProductsProvider);
+  ref.invalidate(onSaleProductsProvider);
+  ref.invalidate(productListProvider);
+  ref.invalidate(searchResultsProvider);
+  ref.invalidate(categoryProductsProvider); // family → all categories
+  ref.invalidate(searchProductsProvider); // family → all queries
+  ref.invalidate(searchSuggestionsProvider); // family → all queries
+  ref.invalidate(trendingSearchesProvider);
 }

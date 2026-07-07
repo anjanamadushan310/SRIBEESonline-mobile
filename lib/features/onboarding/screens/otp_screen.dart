@@ -5,16 +5,19 @@
 /// All strings localized via [languageProvider].
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/api/api_client.dart';
 import '../../../core/navigation/routes.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/language_provider.dart';
 import '../../../core/providers/phone_auth_provider.dart';
 import '../../../features/auth/models/user_model.dart';
 import 'address_selection_screen.dart';
+import 'otp_verification_screen.dart';
 
 const _maroon = Color(0xFF6B2D5C);
 
@@ -94,30 +97,44 @@ class _OTPScreenState extends ConsumerState<OTPScreen> {
     }
   }
 
+  /// After authentication, gate on phone verification (Module 1.7): a real
+  /// backend session goes through [OtpVerificationScreen] first; the debug
+  /// mock-auth path (no token) proceeds straight to the location gatekeeper so
+  /// the demo onboarding is never blocked by an OTP it can't request.
+  void _continueAfterAuth() {
+    final hasSession = ref.read(apiClientProvider).hasAccessToken;
+    if (hasSession) {
+      final phone = ref.read(phoneVerificationProvider).phoneNumber;
+      pushAndClearFade(context, OtpVerificationScreen(phone: phone));
+    } else {
+      pushAndClearFade(context, const AddressSelectionScreen());
+    }
+  }
+
   Future<void> _onVerify() async {
     final code = _controller.text.replaceAll(RegExp(r'[^0-9]'), '');
     final langCode = ref.read(languageProvider)?.languageCode ?? 'en';
 
     setState(() => _errorText = null);
 
-    if (code.length < 4) {
+    if (code.length != 6) {
       setState(() => _errorText = _t(langCode, 'errorInvalidOtp'));
       return;
     }
 
     setState(() => _loading = true);
 
-    // Temporary mock OTP for development (replace with Notify.lk / real SMS later).
-    const mockOtp = '1234';
-    if (code == mockOtp) {
+    // Debug-only mock OTP — never active in release builds.
+    if (kDebugMode && code == '1234') {
       ref.read(authProvider.notifier).setMockAuthenticated(User.mockUser);
       ref.read(phoneVerificationProvider.notifier).clear();
       if (!mounted) return;
       setState(() => _loading = false);
-      pushAndClearFade(context, const AddressSelectionScreen());
+      _continueAfterAuth();
       return;
     }
 
+    // TODO: verify OTP via Notify.lk / Firebase Auth API call here.
     setState(() {
       _loading = false;
       _errorText = _t(langCode, 'errorVerifyFailed');

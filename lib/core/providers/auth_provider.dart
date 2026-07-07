@@ -159,18 +159,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> register({
     required String email,
     required String password,
-    required String firstName,
-    required String lastName,
+    required String fullName,
     required String phone,
   }) async {
     state = const AuthLoading();
-    
+
     try {
       final result = await _repository.register(
         email: email,
         password: password,
-        firstName: firstName,
-        lastName: lastName,
+        fullName: fullName,
         phone: phone,
       );
       
@@ -216,10 +214,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  /// Update user profile
+  /// Update user profile (single full_name field, per backend schema)
   Future<void> updateProfile({
-    String? firstName,
-    String? lastName,
+    String? fullName,
     String? phone,
     String? avatarUrl,
   }) async {
@@ -227,13 +224,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
       authenticated: (user) => user,
       orElse: () => null,
     );
-    
+
     if (currentUser == null) return;
-    
+
     try {
       final updatedUser = await _repository.updateProfile(
-        firstName: firstName,
-        lastName: lastName,
+        fullName: fullName,
         phone: phone,
         avatarUrl: avatarUrl,
       );

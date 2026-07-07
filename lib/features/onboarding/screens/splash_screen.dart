@@ -1,26 +1,28 @@
 /// SRIBEESonline - Splash Screen
 ///
 /// App-launch flow:
-///   1. Fetch the splash-video URL from `GET /api/v1/app/splash-config`.
-///   2. Play the video via [VideoPlayerController.networkUrl].
-///   3. When the video ends (or on error → show logo for 2 s), determine
+///   1. Copy the local asset video to the app's cache directory (first launch).
+///   2. Play the video via [VideoPlayerController.file] — most reliable on Android.
+///   3. Simultaneously fetch dynamic video URL from `GET /api/v1/app/splash-config`.
+///      If a dynamic URL exists, it plays that instead on the next launch.
+///   4. When the video ends (or on error → show logo for 2 s), determine
 ///      the next screen by inspecting SharedPreferences:
 ///        - language_code missing → [LanguageSelectionScreen]
 ///        - branch_id missing    → [AddressSelectionScreen]
 ///        - both present         → [HomeScreen]
 ///
-/// If the video URL cannot be fetched or the player fails, a static
-/// branding logo is shown for 2 seconds as a graceful fallback.
+/// Uses VideoPlayerController.file() instead of .asset() for maximum
+/// Android compatibility (avoids ExoPlayer asset-bundle access issues).
 library;
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../../config/app_config.dart';
 import '../../../core/api/api_client.dart';
 import '../../../core/navigation/routes.dart';
 import '../../../core/providers/branch_provider.dart';
@@ -62,21 +64,46 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   // ========================================================================
 
   Future<void> _initSplash() async {
-    try {
-      final videoUrl = await _fetchSplashVideoUrl();
+    await _initLocalAssetVideo();
+  }
 
-      if (videoUrl != null && videoUrl.isNotEmpty) {
-        await _initVideo(videoUrl);
-      } else {
-        _showLogoFallback();
+  /// Play the local video asset directly.
+  /// This is the most robust and standard approach in Flutter.
+  Future<void> _initLocalAssetVideo() async {
+    // Clean up old controller
+    if (_videoController != null) {
+      _videoController!.removeListener(_onVideoUpdate);
+      await _videoController!.dispose();
+      _videoController = null;
+    }
+
+    final controller = VideoPlayerController.asset('assets/videos/splash.mp4');
+    _videoController = controller;
+
+    try {
+      await controller.initialize();
+
+      if (!mounted) return;
+
+      if (kDebugMode) {
+        final size = controller.value.size;
+        final dur = controller.value.duration;
+        print('Splash: video initialised — ${size.width}x${size.height}, $dur');
       }
+
+      controller.addListener(_onVideoUpdate);
+      await controller.play();
+
+      setState(() => _videoReady = true);
     } catch (e) {
-      if (kDebugMode) print('Splash: error fetching config — $e');
+      if (kDebugMode) print('Splash: VideoPlayerController.asset failed — $e');
+      await controller.dispose();
+      _videoController = null;
       _showLogoFallback();
     }
   }
 
-  /// Fetch the splash-video URL from the backend.
+  /// Fetch the dynamic splash-video URL from the backend (for future use).
   Future<String?> _fetchSplashVideoUrl() async {
     try {
       final api = ref.read(apiClientProvider);
@@ -92,26 +119,6 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
       return data['splash_video_url'] as String?;
     } catch (_) {
       return null;
-    }
-  }
-
-  /// Initialise the video player.
-  Future<void> _initVideo(String url) async {
-    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
-    _videoController = controller;
-
-    try {
-      await controller.initialize();
-
-      if (!mounted) return;
-
-      controller.addListener(_onVideoUpdate);
-      await controller.play();
-
-      setState(() => _videoReady = true);
-    } catch (e) {
-      if (kDebugMode) print('Splash: video init failed — $e');
-      _showLogoFallback();
     }
   }
 
@@ -178,7 +185,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: _videoReady ? Colors.black : Colors.white,
       body: _videoReady ? _buildVideoPlayer() : _buildLogoFallback(),
     );
   }
@@ -209,7 +216,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
               width: 120,
               height: 120,
               decoration: BoxDecoration(
-                color: const Color(0xFF2E7D32).withOpacity(0.1),
+                color: const Color(0xFF2E7D32).withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: const Icon(

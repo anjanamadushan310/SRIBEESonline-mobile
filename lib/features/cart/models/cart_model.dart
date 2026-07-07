@@ -27,7 +27,7 @@ class CartItem with _$CartItem {
         'quantity': json['quantity'] ?? 1,
         'price': (json['price'] as num).toDouble(),
         'name': json['name'] ?? '',
-        'imageUrl': json['image_url'] ?? json['imageUrl'],
+        'imageUrl': json['image_url'] ?? json['imageUrl'] ?? json['image'],
         'addedAt': json['added_at'] ?? json['addedAt'],
         'updatedAt': json['updated_at'] ?? json['updatedAt'],
       });

@@ -1,7 +1,12 @@
 /// SRIBEESonline - Address Form Screen
 ///
-/// Single form with Province → District → Post Office cascading dropdowns.
-/// On submit calls POST /branch/resolve-by-location and navigates to Home.
+/// Single form with Province → District → Post Office cascading dropdowns
+/// plus address lines.
+///
+/// Authenticated users: the address is persisted via the backend Address CRUD
+/// (POST /user/addresses, PUT /user/addresses/{id}, DELETE in edit mode) and
+/// the screen pops with `true` so the caller can refresh its list.
+/// Guests: falls back to POST /branch/resolve-by-location and navigates Home.
 library;
 
 import 'package:flutter/material.dart';
@@ -10,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_client.dart';
 import '../../../core/api/locations_api.dart';
 import '../../../core/navigation/routes.dart';
+import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/branch_provider.dart';
 import '../../home/screens/home_screen.dart';
 
@@ -18,16 +24,24 @@ const _maroon = Color(0xFF6B2D5C);
 const _green = Color(0xFF2D5C4A);
 
 class AddressFormScreen extends ConsumerStatefulWidget {
-  /// Optional initial values for edit mode (e.g. province, district, postOffice).
+  /// Non-null in edit mode — the backend address_id being edited.
+  final String? addressId;
+
+  /// Optional initial values for edit mode.
   final String? initialProvince;
   final String? initialDistrict;
   final String? initialPostOffice;
+  final String? initialAddressLine1;
+  final String? initialAddressLine2;
 
   const AddressFormScreen({
     super.key,
+    this.addressId,
     this.initialProvince,
     this.initialDistrict,
     this.initialPostOffice,
+    this.initialAddressLine1,
+    this.initialAddressLine2,
   });
 
   @override
@@ -49,7 +63,13 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
   bool _loadingDistricts = false;
   bool _loadingPostOffices = false;
   bool _submitting = false;
+  bool _deleting = false;
   String? _error;
+
+  late final TextEditingController _addressLine1Controller;
+  late final TextEditingController _addressLine2Controller;
+
+  bool get _isEditMode => widget.addressId != null;
 
   @override
   void initState() {
@@ -57,7 +77,18 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
     _selectedProvince = widget.initialProvince;
     _selectedDistrict = widget.initialDistrict;
     _selectedPostOffice = widget.initialPostOffice;
+    _addressLine1Controller =
+        TextEditingController(text: widget.initialAddressLine1 ?? '');
+    _addressLine2Controller =
+        TextEditingController(text: widget.initialAddressLine2 ?? '');
     _loadProvinces();
+  }
+
+  @override
+  void dispose() {
+    _addressLine1Controller.dispose();
+    _addressLine2Controller.dispose();
+    super.dispose();
   }
 
   Future<void> _loadProvinces() async {
@@ -178,6 +209,92 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
       return;
     }
 
+    final isAuth = ref.read(isAuthenticatedProvider);
+    if (isAuth) {
+      await _saveAddress(
+        province: province,
+        district: district,
+        postOffice: postOffice,
+      );
+    } else {
+      await _resolveBranchAsGuest(
+        province: province,
+        district: district,
+        postOffice: postOffice,
+      );
+    }
+  }
+
+  /// Authenticated flow: persist via the backend Address CRUD, then pop with
+  /// `true` so the address list refreshes.
+  Future<void> _saveAddress({
+    required String province,
+    required String district,
+    required String postOffice,
+  }) async {
+    final line1 = _addressLine1Controller.text.trim();
+    if (line1.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter Address Line 1.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
+    final line2 = _addressLine2Controller.text.trim();
+    final payload = <String, dynamic>{
+      'address_line1': line1,
+      'address_line2': line2.isEmpty ? null : line2,
+      'province': province,
+      'district': district,
+      'post_office': postOffice,
+    };
+
+    try {
+      final api = ref.read(apiClientProvider);
+      if (_isEditMode) {
+        await api.put<Map<String, dynamic>>(
+          '/user/addresses/${widget.addressId}',
+          data: payload,
+        );
+      } else {
+        await api.post<Map<String, dynamic>>(
+          '/user/addresses',
+          data: payload,
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_isEditMode ? 'Address updated.' : 'Address saved.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      _showError(e.message);
+      setState(() => _submitting = false);
+    } catch (e) {
+      if (!mounted) return;
+      _showError('Could not save the address. Please try again.');
+      setState(() => _submitting = false);
+    }
+  }
+
+  /// Guest flow: no persistence — resolve the serving branch and go Home.
+  Future<void> _resolveBranchAsGuest({
+    required String province,
+    required String district,
+    required String postOffice,
+  }) async {
     setState(() {
       _submitting = true;
       _error = null;
@@ -203,6 +320,49 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
     }
   }
 
+  Future<void> _deleteAddress() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete address?'),
+        content: const Text('This address will be removed from your account.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _deleting = true);
+    try {
+      final api = ref.read(apiClientProvider);
+      await api.delete('/user/addresses/${widget.addressId}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Address deleted.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      _showError(e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      _showError('Could not delete the address. Please try again.');
+    }
+  }
+
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -220,9 +380,24 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Delivery Address'),
+        title: Text(_isEditMode ? 'Edit Address' : 'Delivery Address'),
         backgroundColor: _maroon,
         foregroundColor: Colors.white,
+        actions: [
+          if (_isEditMode)
+            IconButton(
+              icon: _deleting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.delete_outline_rounded),
+              tooltip: 'Delete address',
+              onPressed: (_deleting || _submitting) ? null : _deleteAddress,
+            ),
+        ],
       ),
       body: Form(
         key: _formKey,
@@ -327,6 +502,20 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
                   .toList(),
               onChanged: (_loadingPostOffices || _selectedDistrict == null) ? null : (v) => setState(() => _selectedPostOffice = v),
             ),
+            const SizedBox(height: 16),
+
+            // Address lines (persisted for authenticated users)
+            TextFormField(
+              controller: _addressLine1Controller,
+              decoration: _inputDecoration('Address Line 1 (Street/House No)'),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _addressLine2Controller,
+              decoration: _inputDecoration('Address Line 2 (Locality/Village)'),
+              textInputAction: TextInputAction.done,
+            ),
             const SizedBox(height: 32),
 
             SizedBox(
@@ -344,7 +533,7 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
                         width: 24,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
-                    : const Text('Confirm & Continue'),
+                    : Text(_isEditMode ? 'Save Changes' : 'Confirm & Continue'),
               ),
             ),
           ],

@@ -16,13 +16,14 @@ import 'core/providers/language_provider.dart';
 import 'app.dart';
 
 void main() async {
-  AppConfig.initialize(Environment.development);
-
   WidgetsFlutterBinding.ensureInitialized();
 
   final prefs = await SharedPreferences.getInstance();
 
-  await FirebaseService.initialize();
+  // Backend is hosted at api.sribees.com — use production config.
+  AppConfig.initialize(Environment.production);
+
+  await FirebaseService.initialize(optional: true);
 
   await SentryService.initialize(
     appRunner: () => runApp(

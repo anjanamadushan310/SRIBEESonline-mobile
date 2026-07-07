@@ -1,165 +1,149 @@
 /// SRIBEESonline - Cart Provider
 ///
-/// Riverpod state management for shopping cart.
-/// Supports offline mode and server sync.
+/// Backend-driven shopping cart state (Riverpod), synced with the Redis cart
+/// APIs:
+///
+///   GET    /cart                        - load cart
+///   POST   /cart/items                  - add item
+///   PUT    /cart/items/{id}?variant_id= - update quantity (0 ⇒ remove)
+///   DELETE /cart/items/{id}?variant_id= - remove item
+///   DELETE /cart                        - clear cart
+///   POST   /cart/coupon                 - apply coupon
+///   DELETE /cart/coupon                 - remove coupon
+///
+/// The backend cart requires authentication; for guests the cart falls back
+/// to purely local state with the same public API (`items`, `itemCount`,
+/// `addItem`, `updateQuantity`, `removeItem`, `clearCart`), so the UI does
+/// not need to care which mode is active.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../api/api_client.dart';
 import '../../features/cart/models/cart_model.dart';
-import '../../features/cart/repositories/cart_repository.dart';
+import 'auth_provider.dart';
 
-part 'cart_provider.freezed.dart';
+// Flat delivery fee applied to the local (guest) cart once it has items.
+// Server carts use the totals computed by the backend.
+const double _deliveryFee = 350;
 
 // =============================================================================
 // Cart State
 // =============================================================================
 
-@freezed
-class CartState with _$CartState {
-  const factory CartState({
-    @Default([]) List<CartItem> items,
-    @Default(false) bool isLoading,
-    @Default(false) bool isSyncing,
+class CartState {
+  final List<CartItem> items;
+  final bool isLoading;
+  final String? error;
+  final CartTotals? totals;
+  final AppliedCoupon? coupon;
+
+  const CartState({
+    this.items = const [],
+    this.isLoading = false,
+    this.error,
+    this.totals,
+    this.coupon,
+  });
+
+  int get itemCount => items.fold(0, (sum, item) => sum + item.quantity);
+
+  bool get isEmpty => items.isEmpty;
+
+  double get subtotal => totals?.subtotal ?? 0;
+
+  double get total => totals?.total ?? 0;
+
+  CartState copyWith({
+    List<CartItem>? items,
+    bool? isLoading,
     String? error,
     CartTotals? totals,
     AppliedCoupon? coupon,
-    String? cartVersion,
-  }) = _CartState;
-
-  const CartState._();
-
-  int get itemCount => items.fold(0, (sum, item) => sum + item.quantity);
-  
-  bool get isEmpty => items.isEmpty;
-  
-  double get subtotal => totals?.subtotal ?? 0;
-  
-  double get total => totals?.total ?? 0;
-}
-
-@freezed
-class CartTotals with _$CartTotals {
-  const factory CartTotals({
-    @Default(0) double subtotal,
-    @Default(0) double discount,
-    @Default(0) double tax,
-    @Default(0) double shipping,
-    @Default(0) double total,
-  }) = _CartTotals;
-
-  factory CartTotals.fromJson(Map<String, dynamic> json) => CartTotals(
-        subtotal: (json['subtotal'] as num?)?.toDouble() ?? 0,
-        discount: (json['discount'] as num?)?.toDouble() ?? 0,
-        tax: (json['tax'] as num?)?.toDouble() ?? 0,
-        shipping: (json['shipping'] as num?)?.toDouble() ?? 0,
-        total: (json['total'] as num?)?.toDouble() ?? 0,
-      );
-}
-
-@freezed
-class AppliedCoupon with _$AppliedCoupon {
-  const factory AppliedCoupon({
-    required String code,
-    required String discountType,
-    required double discountValue,
-  }) = _AppliedCoupon;
+    bool clearError = false,
+    bool clearCoupon = false,
+  }) {
+    return CartState(
+      items: items ?? this.items,
+      isLoading: isLoading ?? this.isLoading,
+      error: clearError ? null : (error ?? this.error),
+      totals: totals ?? this.totals,
+      coupon: clearCoupon ? null : (coupon ?? this.coupon),
+    );
+  }
 }
 
 // =============================================================================
-// Repository Provider
-// =============================================================================
-
-final cartRepositoryProvider = Provider<CartRepository>((ref) {
-  final apiClient = ref.watch(apiClientProvider);
-  return CartRepository(apiClient);
-});
-
-// =============================================================================
-// Cart Provider
+// Providers
 // =============================================================================
 
 final cartProvider = StateNotifierProvider<CartNotifier, CartState>((ref) {
-  final repository = ref.watch(cartRepositoryProvider);
-  return CartNotifier(repository);
+  final apiClient = ref.watch(apiClientProvider);
+  // Recreated on login/logout so the server cart is (re)loaded.
+  final isAuthenticated = ref.watch(isAuthenticatedProvider);
+  return CartNotifier(apiClient, isAuthenticated: isAuthenticated);
 });
 
-/// Cart item count (for badge)
-final cartItemCountProvider = Provider<int>((ref) {
-  final cart = ref.watch(cartProvider);
-  return cart.itemCount;
-});
+/// Cart item count (for badge).
+final cartItemCountProvider =
+    Provider<int>((ref) => ref.watch(cartProvider).itemCount);
 
-/// Cart total (for display)
-final cartTotalProvider = Provider<double>((ref) {
-  final cart = ref.watch(cartProvider);
-  return cart.total;
-});
+/// Cart total (for display).
+final cartTotalProvider =
+    Provider<double>((ref) => ref.watch(cartProvider).total);
 
 class CartNotifier extends StateNotifier<CartState> {
-  final CartRepository _repository;
+  final ApiClient _api;
+  final bool _isAuthenticated;
 
-  CartNotifier(this._repository) : super(const CartState()) {
-    _loadCart();
-  }
-
-  /// Load cart from local storage and sync with server
-  Future<void> _loadCart() async {
-    state = state.copyWith(isLoading: true);
-
-    try {
-      // Load from local storage first (offline support)
-      final localCart = await _repository.getLocalCart();
-      if (localCart != null) {
-        state = state.copyWith(
-          items: localCart.items,
-          totals: localCart.totals,
-          coupon: localCart.coupon,
-          cartVersion: localCart.version,
-        );
-      }
-
-      // Sync with server
-      await syncWithServer();
-    } catch (e) {
-      state = state.copyWith(error: e.toString());
-    } finally {
-      state = state.copyWith(isLoading: false);
+  CartNotifier(this._api, {required bool isAuthenticated})
+      : _isAuthenticated = isAuthenticated,
+        super(const CartState()) {
+    if (_isAuthenticated) {
+      loadCart();
+    } else {
+      _recalculateLocalTotals();
     }
   }
 
-  /// Sync cart with server
-  Future<void> syncWithServer() async {
-    if (state.isSyncing) return;
+  bool get _useServer => _isAuthenticated && _api.isAuthenticated;
 
-    state = state.copyWith(isSyncing: true);
+  // ==========================================================================
+  // Server sync
+  // ==========================================================================
 
+  /// GET /cart — replace local state with the server cart.
+  Future<void> loadCart() async {
+    if (!_useServer) return;
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final result = await _repository.syncCart(
-        items: state.items,
-        coupon: state.coupon,
-        version: state.cartVersion,
-      );
-
-      state = state.copyWith(
-        items: result.items,
-        totals: result.totals,
-        coupon: result.coupon,
-        cartVersion: result.version,
-        isSyncing: false,
-      );
-
-      // Save to local storage
-      await _repository.saveLocalCart(result);
-    } catch (e) {
-      state = state.copyWith(isSyncing: false);
-      // Keep local cart on sync failure
+      final response = await _api.get<Map<String, dynamic>>('/cart');
+      _applyServerCart(response);
+    } on ApiException catch (e) {
+      state = state.copyWith(isLoading: false, error: e.message);
+    } catch (_) {
+      state = state.copyWith(isLoading: false, error: 'Failed to load cart.');
     }
   }
 
-  /// Add item to cart
+  void _applyServerCart(Map<String, dynamic> response) {
+    final data = response['data'];
+    final cart = Cart.fromJson(
+      data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{},
+    );
+    state = CartState(
+      items: cart.items,
+      totals: cart.totals ?? const CartTotals(),
+      coupon: cart.coupon,
+      isLoading: false,
+    );
+  }
+
+  // ==========================================================================
+  // Public API (same signatures the UI already relies on)
+  // ==========================================================================
+
+  /// Add item to cart (or bump quantity if it already exists).
   Future<void> addItem({
     required String productId,
     String? variantId,
@@ -167,24 +151,10 @@ class CartNotifier extends StateNotifier<CartState> {
     required double price,
     required String name,
     String? imageUrl,
+    String? sku,
   }) async {
-    // Optimistic update
-    final existingIndex = state.items.indexWhere(
-      (item) => item.productId == productId && item.variantId == variantId,
-    );
-
-    List<CartItem> updatedItems;
-
-    if (existingIndex >= 0) {
-      // Update quantity
-      updatedItems = [...state.items];
-      final existing = updatedItems[existingIndex];
-      updatedItems[existingIndex] = existing.copyWith(
-        quantity: existing.quantity + quantity,
-      );
-    } else {
-      // Add new item
-      final newItem = CartItem(
+    if (!_useServer) {
+      _addItemLocal(
         productId: productId,
         variantId: variantId,
         quantity: quantity,
@@ -192,126 +162,205 @@ class CartNotifier extends StateNotifier<CartState> {
         name: name,
         imageUrl: imageUrl,
       );
-      updatedItems = [...state.items, newItem];
+      return;
     }
 
-    state = state.copyWith(items: updatedItems);
-    _recalculateTotals();
-
-    // Sync with server
-    await _repository.addItem(
-      productId: productId,
-      variantId: variantId,
-      quantity: quantity,
-    );
+    try {
+      final response = await _api.post<Map<String, dynamic>>(
+        '/cart/items',
+        data: {
+          'product_id': productId,
+          'quantity': quantity,
+          'price': price,
+          'name': name,
+          if (imageUrl != null) 'image': imageUrl,
+          if (sku != null) 'sku': sku,
+          if (variantId != null) 'variant_id': variantId,
+        },
+      );
+      _applyServerCart(response);
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    } catch (_) {
+      state = state.copyWith(error: 'Failed to add item to cart.');
+    }
   }
 
-  /// Update item quantity
+  /// Update an item's quantity (removes it when quantity <= 0).
   Future<void> updateQuantity({
     required String productId,
     String? variantId,
     required int quantity,
   }) async {
-    if (quantity <= 0) {
-      await removeItem(productId: productId, variantId: variantId);
+    if (!_useServer) {
+      _updateQuantityLocal(
+        productId: productId,
+        variantId: variantId,
+        quantity: quantity,
+      );
       return;
     }
 
-    final updatedItems = state.items.map((item) {
+    try {
+      final response = await _api.put<Map<String, dynamic>>(
+        variantId != null
+            ? '/cart/items/$productId?variant_id=$variantId'
+            : '/cart/items/$productId',
+        data: {'quantity': quantity < 0 ? 0 : quantity},
+      );
+      _applyServerCart(response);
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+      await loadCart();
+    } catch (_) {
+      state = state.copyWith(error: 'Failed to update cart.');
+    }
+  }
+
+  /// Remove an item from the cart.
+  Future<void> removeItem({required String productId, String? variantId}) async {
+    if (!_useServer) {
+      _removeItemLocal(productId: productId, variantId: variantId);
+      return;
+    }
+
+    try {
+      // ApiClient.delete returns no body — refresh the cart afterwards.
+      await _api.delete(
+        variantId != null
+            ? '/cart/items/$productId?variant_id=$variantId'
+            : '/cart/items/$productId',
+      );
+      await loadCart();
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    } catch (_) {
+      state = state.copyWith(error: 'Failed to remove item.');
+    }
+  }
+
+  /// Empty the cart.
+  Future<void> clearCart() async {
+    if (!_useServer) {
+      state = const CartState();
+      _recalculateLocalTotals();
+      return;
+    }
+
+    try {
+      await _api.delete('/cart');
+      state = const CartState(totals: CartTotals());
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    } catch (_) {
+      state = state.copyWith(error: 'Failed to clear cart.');
+    }
+  }
+
+  /// Apply a coupon code (server carts only).
+  Future<void> applyCoupon(String code) async {
+    if (!_useServer) return;
+    try {
+      final response = await _api.post<Map<String, dynamic>>(
+        '/cart/coupon',
+        data: {'code': code},
+      );
+      _applyServerCart(response);
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    }
+  }
+
+  /// Remove the applied coupon (server carts only).
+  Future<void> removeCoupon() async {
+    if (!_useServer) return;
+    try {
+      await _api.delete('/cart/coupon');
+      await loadCart();
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    }
+  }
+
+  // ==========================================================================
+  // Local (guest) cart fallback
+  // ==========================================================================
+
+  void _addItemLocal({
+    required String productId,
+    String? variantId,
+    int quantity = 1,
+    required double price,
+    required String name,
+    String? imageUrl,
+  }) {
+    final existingIndex = state.items.indexWhere(
+      (item) => item.productId == productId && item.variantId == variantId,
+    );
+
+    final items = [...state.items];
+    if (existingIndex >= 0) {
+      final existing = items[existingIndex];
+      items[existingIndex] =
+          existing.copyWith(quantity: existing.quantity + quantity);
+    } else {
+      items.add(CartItem(
+        productId: productId,
+        variantId: variantId,
+        quantity: quantity,
+        price: price,
+        name: name,
+        imageUrl: imageUrl,
+      ));
+    }
+
+    state = state.copyWith(items: items);
+    _recalculateLocalTotals();
+  }
+
+  void _updateQuantityLocal({
+    required String productId,
+    String? variantId,
+    required int quantity,
+  }) {
+    if (quantity <= 0) {
+      _removeItemLocal(productId: productId, variantId: variantId);
+      return;
+    }
+
+    final items = state.items.map((item) {
       if (item.productId == productId && item.variantId == variantId) {
         return item.copyWith(quantity: quantity);
       }
       return item;
     }).toList();
 
-    state = state.copyWith(items: updatedItems);
-    _recalculateTotals();
-
-    await _repository.updateQuantity(
-      productId: productId,
-      variantId: variantId,
-      quantity: quantity,
-    );
+    state = state.copyWith(items: items);
+    _recalculateLocalTotals();
   }
 
-  /// Remove item from cart
-  Future<void> removeItem({
-    required String productId,
-    String? variantId,
-  }) async {
-    final updatedItems = state.items
+  void _removeItemLocal({required String productId, String? variantId}) {
+    final items = state.items
         .where((item) =>
             !(item.productId == productId && item.variantId == variantId))
         .toList();
 
-    state = state.copyWith(items: updatedItems);
-    _recalculateTotals();
-
-    await _repository.removeItem(
-      productId: productId,
-      variantId: variantId,
-    );
+    state = state.copyWith(items: items);
+    _recalculateLocalTotals();
   }
 
-  /// Apply coupon code
-  Future<bool> applyCoupon(String code) async {
-    try {
-      final result = await _repository.applyCoupon(code);
-      
-      state = state.copyWith(
-        coupon: result.coupon,
-        totals: result.totals,
-      );
-      
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Remove coupon
-  Future<void> removeCoupon() async {
-    state = state.copyWith(coupon: null);
-    _recalculateTotals();
-    
-    await _repository.removeCoupon();
-  }
-
-  /// Clear cart
-  Future<void> clearCart() async {
-    state = const CartState();
-    await _repository.clearCart();
-  }
-
-  /// Recalculate totals locally
-  void _recalculateTotals() {
+  void _recalculateLocalTotals() {
     final subtotal = state.items.fold<double>(
       0,
       (sum, item) => sum + (item.price * item.quantity),
     );
-
-    double discount = 0;
-    if (state.coupon != null) {
-      if (state.coupon!.discountType == 'percentage') {
-        discount = subtotal * (state.coupon!.discountValue / 100);
-      } else {
-        discount = state.coupon!.discountValue;
-      }
-      discount = discount.clamp(0, subtotal);
-    }
-
-    final taxableAmount = subtotal - discount;
-    final tax = taxableAmount * 0.08; // 8% tax
-    final shipping = taxableAmount >= 50 ? 0.0 : 5.99;
-    final total = taxableAmount + tax + shipping;
+    final shipping = subtotal > 0 ? _deliveryFee : 0.0;
 
     state = state.copyWith(
       totals: CartTotals(
         subtotal: subtotal,
-        discount: discount,
-        tax: tax,
         shipping: shipping,
-        total: total,
+        total: subtotal + shipping,
       ),
     );
   }

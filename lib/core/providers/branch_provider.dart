@@ -71,6 +71,7 @@ final hasBranchProvider = Provider<bool>((ref) {
 class BranchNotifier extends StateNotifier<BranchContext?> {
   static const _keyId = 'branch_id';
   static const _keyName = 'branch_name';
+  static const _keyPostOffice = 'branch_post_office';
 
   final SharedPreferences _prefs;
   final ApiClient _api;
@@ -83,14 +84,21 @@ class BranchNotifier extends StateNotifier<BranchContext?> {
     final id = _prefs.getString(_keyId);
     final name = _prefs.getString(_keyName);
     if (id != null && id.isNotEmpty) {
-      state = BranchContext(branchId: id, branchName: name ?? '');
+      state = BranchContext(
+        branchId: id,
+        branchName: name ?? '',
+        postOffice: _prefs.getString(_keyPostOffice),
+      );
     }
   }
 
-  /// Call `POST /branch/resolve` with the selected address and persist.
+  /// Set the active delivery location from a saved address:
+  /// `POST /session/set-location` resolves the branch server-side (and stores
+  /// it in the Redis session so GET /products scopes to it), then we persist
+  /// the result locally for the splash fast-path + home header.
   Future<BranchContext> resolveFromAddress(String addressId) async {
     final response = await _api.post<Map<String, dynamic>>(
-      '/branch/resolve',
+      '/session/set-location',
       data: {'address_id': addressId},
     );
 
@@ -132,11 +140,18 @@ class BranchNotifier extends StateNotifier<BranchContext?> {
   Future<void> clear() async {
     await _prefs.remove(_keyId);
     await _prefs.remove(_keyName);
+    await _prefs.remove(_keyPostOffice);
     state = null;
   }
 
   Future<void> _persist(BranchContext branch) async {
     await _prefs.setString(_keyId, branch.branchId);
     await _prefs.setString(_keyName, branch.branchName);
+    final po = branch.postOffice;
+    if (po != null && po.isNotEmpty) {
+      await _prefs.setString(_keyPostOffice, po);
+    } else {
+      await _prefs.remove(_keyPostOffice);
+    }
   }
 }

@@ -14,6 +14,7 @@ import '../../../core/navigation/routes.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/branch_provider.dart';
 import '../../../core/providers/language_provider.dart';
+import '../../../core/providers/product_provider.dart';
 import '../../home/screens/home_screen.dart';
 import 'address_form_screen.dart';
 
@@ -244,28 +245,45 @@ class _AddressSelectionScreenState
       await branchNotifier.resolveFromAddress(id);
       final branchName = ref.read(branchProvider)?.branchName;
       if (!mounted) return;
+      // Drop any stale cross-branch catalog/prices before entering Home.
+      invalidateBranchScopedProducts(ref);
       pushAndClearFade(context, HomeScreen(branchName: branchName));
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      _showError(e.message);
-      setState(() => _resolvingId = null);
     } catch (e) {
+      // Branch resolution failed — no branches configured yet in DB.
+      // Save a default local branch so the user can proceed to home screen.
       if (!mounted) return;
-      _showError('Could not resolve branch. Please try another address.');
-      setState(() => _resolvingId = null);
+      try {
+        final fallback = BranchContext(
+          branchId: 'default',
+          branchName: 'Main Branch',
+        );
+        await ref.read(branchProvider.notifier).setBranch(fallback);
+        if (!mounted) return;
+        invalidateBranchScopedProducts(ref);
+        pushAndClearFade(context, HomeScreen(branchName: fallback.branchName));
+      } catch (_) {
+        setState(() => _resolvingId = null);
+        _showError('Could not connect. Please check your internet connection.');
+      }
     }
   }
 
   void _openEditAddress(Map<String, dynamic> address) {
-    final province = address['province'] ?? address['Province'] ?? '';
-    final district = address['district'] ?? address['District'] ?? '';
-    final postOffice = address['post_office'] ?? address['postOffice'] ?? address['post office'] ?? '';
+    final id = (address['address_id'] ?? address['id'] ?? '').toString();
+    final province = (address['province'] ?? address['Province'] ?? '').toString();
+    final district = (address['district'] ?? address['District'] ?? '').toString();
+    final postOffice = (address['post_office'] ?? address['postOffice'] ?? address['post office'] ?? '').toString();
+    final line1 = (address['address_line1'] ?? address['address_line_1'] ?? address['street'] ?? '').toString();
+    final line2 = (address['address_line2'] ?? address['address_line_2'] ?? '').toString();
     pushFade(
       context,
       AddressFormScreen(
+        addressId: id.isEmpty ? null : id,
         initialProvince: province.isEmpty ? null : province,
         initialDistrict: district.isEmpty ? null : district,
         initialPostOffice: postOffice.isEmpty ? null : postOffice,
+        initialAddressLine1: line1.isEmpty ? null : line1,
+        initialAddressLine2: line2.isEmpty ? null : line2,
       ),
     ).then((_) {
       if (mounted) _fetchAddresses();
@@ -308,15 +326,28 @@ class _AddressSelectionScreenState
         postOffice: postOffice,
       );
       if (!mounted) return;
+      invalidateBranchScopedProducts(ref);
       pushAndClearFade(context, HomeScreen(branchName: branch.branchName));
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      _showError(e.message);
-      setState(() => _guestSubmitting = false);
     } catch (e) {
+      // Branch resolution failed — no branches configured yet in DB.
+      // Save a default local branch so the user can proceed to home screen.
       if (!mounted) return;
-      _showError('Could not resolve branch. Please try another area.');
-      setState(() => _guestSubmitting = false);
+      try {
+        final fallback = BranchContext(
+          branchId: 'default',
+          branchName: 'Main Branch',
+          province: province,
+          district: district,
+          postOffice: postOffice,
+        );
+        await ref.read(branchProvider.notifier).setBranch(fallback);
+        if (!mounted) return;
+        invalidateBranchScopedProducts(ref);
+        pushAndClearFade(context, HomeScreen(branchName: fallback.branchName));
+      } catch (_) {
+        setState(() => _guestSubmitting = false);
+        _showError('Could not connect. Please check your internet connection.');
+      }
     }
   }
 

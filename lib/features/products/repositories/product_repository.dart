@@ -4,9 +4,9 @@
 /// Implements caching and offline support.
 library;
 
-import '../api/api_client.dart';
-import 'base_repository.dart';
-import '../../features/products/models/product_model.dart';
+import '../../../core/api/api_client.dart';
+import '../../../core/repositories/base_repository.dart';
+import '../models/product_model.dart';
 
 /// Product list result
 class ProductListResult {
@@ -45,7 +45,24 @@ class SearchSuggestion {
 class ProductRepository extends BaseRepository with OfflineCapable {
   ProductRepository(super.apiClient);
 
-  /// Get products with filtering and pagination
+  // Backend sort_by only accepts these; anything else is dropped so the API
+  // doesn't 422 on legacy values like "relevance".
+  static const _allowedSort = {'created_at', 'price', 'name', 'view_count'};
+
+  /// Parse a `{ success, data: { products: [...], pagination: { total } } }`
+  /// envelope into a [ProductListResult].
+  ProductListResult _parseListEnvelope(Map<String, dynamic> response) {
+    final data = (response['data'] as Map?) ?? const {};
+    final products = (data['products'] as List?)
+            ?.map((e) => Product.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList() ??
+        [];
+    final total = (data['pagination'] as Map?)?['total'] as int? ??
+        products.length;
+    return ProductListResult(products: products, total: total);
+  }
+
+  /// Get products with filtering and pagination (GET /products).
   Future<ProductListResult> getProducts({
     int page = 1,
     int pageSize = 20,
@@ -56,47 +73,69 @@ class ProductRepository extends BaseRepository with OfflineCapable {
     bool? inStock,
     bool? isFeatured,
     bool? onSale,
-    String sortBy = 'relevance',
+    String sortBy = 'created_at',
     String sortOrder = 'desc',
   }) async {
     final queryParams = <String, dynamic>{
       'page': page,
-      'page_size': pageSize,
-      'sort_by': sortBy,
-      'sort_order': sortOrder,
+      'limit': pageSize,
     };
 
-    if (query != null) queryParams['query'] = query;
+    if (query != null && query.isNotEmpty) queryParams['search'] = query;
     if (categoryId != null) queryParams['category_id'] = categoryId;
     if (minPrice != null) queryParams['min_price'] = minPrice;
     if (maxPrice != null) queryParams['max_price'] = maxPrice;
-    if (inStock != null) queryParams['in_stock'] = inStock;
     if (isFeatured != null) queryParams['is_featured'] = isFeatured;
-    if (onSale != null) queryParams['on_sale'] = onSale;
+    if (_allowedSort.contains(sortBy)) {
+      queryParams['sort_by'] = sortBy;
+      queryParams['sort_order'] = sortOrder;
+    }
 
     final response = await apiClient.get<Map<String, dynamic>>(
-      '/api/v1/products/search',
+      // Base URL already includes /api/v1 — do not repeat the prefix here.
+      '/products',
       queryParameters: queryParams,
     );
-
-    final products = (response['products'] as List?)
-            ?.map((e) => Product.fromJson(e as Map<String, dynamic>))
-            .toList() ??
-        [];
-
-    return ProductListResult(
-      products: products,
-      total: response['total'] as int? ?? 0,
-      facets: response['facets'] as Map<String, dynamic>?,
-    );
+    return _parseListEnvelope(response);
   }
 
-  /// Get single product by ID
+  /// Home "Quick Sale" feed — highest-discount products for the active branch.
+  /// GET /products/home-feed.
+  Future<List<Product>> getHomeFeed({int limit = 20}) async {
+    final response = await apiClient.get<Map<String, dynamic>>(
+      '/products/home-feed',
+      queryParameters: {'limit': limit},
+    );
+    final data = (response['data'] as Map?) ?? const {};
+    return (data['products'] as List?)
+            ?.map((e) => Product.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList() ??
+        [];
+  }
+
+  /// Full-text search within the active branch. GET /products/search.
+  Future<ProductListResult> searchProducts({
+    required String query,
+    int page = 1,
+    int limit = 20,
+  }) async {
+    final response = await apiClient.get<Map<String, dynamic>>(
+      '/products/search',
+      queryParameters: {'q': query, 'page': page, 'limit': limit},
+    );
+    return _parseListEnvelope(response);
+  }
+
+  /// Get single product by ID (GET /products/{id}).
   Future<Product?> getProductById(String productId) async {
     try {
       final response = await apiClient.get<Map<String, dynamic>>(
-        '/api/v1/products/$productId',
+        '/products/$productId',
       );
+      final data = response['data'];
+      if (data is Map) {
+        return Product.fromJson(Map<String, dynamic>.from(data));
+      }
       return Product.fromJson(response);
     } on ApiException catch (e) {
       if (e.isNotFound) return null;
@@ -107,7 +146,7 @@ class ProductRepository extends BaseRepository with OfflineCapable {
   /// Get search autocomplete suggestions
   Future<List<SearchSuggestion>> getSearchSuggestions(String query) async {
     final response = await apiClient.get<List<dynamic>>(
-      '/api/v1/products/autocomplete',
+      '/products/autocomplete',
       queryParameters: {'query': query, 'limit': 10},
     );
 
@@ -119,7 +158,7 @@ class ProductRepository extends BaseRepository with OfflineCapable {
   /// Get trending searches
   Future<List<String>> getTrendingSearches() async {
     final response = await apiClient.get<List<dynamic>>(
-      '/api/v1/products/trending-searches',
+      '/products/trending-searches',
     );
     return response.map((e) => e as String).toList();
   }
@@ -161,7 +200,7 @@ class ProductRepository extends BaseRepository with OfflineCapable {
     int limit = 10,
   }) async {
     final response = await apiClient.get<List<dynamic>>(
-      '/api/v1/products/$productId/related',
+      '/products/$productId/related',
       queryParameters: {'limit': limit},
     );
 
@@ -178,7 +217,7 @@ class ProductRepository extends BaseRepository with OfflineCapable {
     String sortBy = 'newest',
   }) async {
     final response = await apiClient.get<Map<String, dynamic>>(
-      '/api/v1/products/$productId/reviews',
+      '/products/$productId/reviews',
       queryParameters: {
         'page': page,
         'page_size': pageSize,
@@ -211,7 +250,7 @@ class ProductRepository extends BaseRepository with OfflineCapable {
     String? comment,
   }) async {
     final response = await apiClient.post<Map<String, dynamic>>(
-      '/api/v1/products/$productId/reviews',
+      '/products/$productId/reviews',
       data: {
         'rating': rating,
         if (title != null) 'title': title,
@@ -269,7 +308,8 @@ class ProductReview {
       id: json['review_id'] as String,
       productId: json['product_id'] as String,
       userId: json['user_id'] as String,
-      userName: json['user']?['first_name'] as String?,
+      userName: json['user']?['full_name'] as String? ??
+          json['user']?['first_name'] as String?,
       rating: json['rating'] as int,
       title: json['title'] as String?,
       comment: json['comment'] as String?,

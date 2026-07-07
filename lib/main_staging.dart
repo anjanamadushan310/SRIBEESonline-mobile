@@ -24,7 +24,7 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
 
   // Initialize Firebase
-  await FirebaseService.initialize();
+  await FirebaseService.initialize(optional: true);
 
   // Initialize Sentry with app runner
   await SentryService.initialize(

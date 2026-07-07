@@ -50,6 +50,11 @@ class ApiClient {
   String? _refreshToken;
   final String? _deviceId;
 
+  /// True when a real backend access token is set (i.e. a genuine authenticated
+  /// session, as opposed to the debug mock-auth path which sets no token).
+  bool get hasAccessToken =>
+      _accessToken != null && _accessToken!.isNotEmpty;
+
   ApiClient({String? deviceId}) : _deviceId = deviceId {
     final headers = <String, dynamic>{
       'Content-Type': 'application/json',
@@ -64,9 +69,9 @@ class ApiClient {
 
     _dio = Dio(BaseOptions(
       baseUrl: AppConfig.instance.apiBaseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-      sendTimeout: const Duration(seconds: 30),
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 15),
+      sendTimeout: const Duration(seconds: 15),
       headers: headers,
     ));
 
@@ -117,10 +122,15 @@ class ApiClient {
     // Retry interceptor for network errors
     _dio.interceptors.add(InterceptorsWrapper(
       onError: (error, handler) async {
-        if (_shouldRetry(error)) {
+        final options = error.requestOptions;
+        final extra = options.extra;
+        final retryCount = extra['retry_count'] as int? ?? 0;
+
+        if (retryCount < 1 && _shouldRetry(error)) {
           try {
+            extra['retry_count'] = retryCount + 1;
             await Future.delayed(const Duration(seconds: 1));
-            final response = await _dio.fetch(error.requestOptions);
+            final response = await _dio.fetch(options);
             return handler.resolve(response);
           } catch (e) {
             return handler.next(error);
@@ -141,14 +151,25 @@ class ApiClient {
     if (_refreshToken == null) return false;
 
     try {
+      // Base URL already includes /api/v1.
       final response = await Dio().post(
-        '${AppConfig.instance.apiBaseUrl}/api/v1/auth/refresh',
+        '${AppConfig.instance.apiBaseUrl}/auth/refresh',
         data: {'refresh_token': _refreshToken},
       );
 
       if (response.statusCode == 200) {
-        _accessToken = response.data['access_token'];
-        _refreshToken = response.data['refresh_token'];
+        // The backend returns tokens nested under `tokens`, exactly like
+        // login/register: { "tokens": { "access_token", "refresh_token" } }.
+        final data = response.data as Map<String, dynamic>;
+        final tokens =
+            (data['tokens'] as Map?)?.cast<String, dynamic>() ?? data;
+        final access =
+            tokens['access_token'] as String? ?? tokens['accessToken'] as String?;
+        final refresh = tokens['refresh_token'] as String? ??
+            tokens['refreshToken'] as String?;
+        if (access == null || access.isEmpty) return false;
+        _accessToken = access;
+        _refreshToken = refresh ?? _refreshToken;
         return true;
       }
     } catch (e) {
@@ -186,6 +207,24 @@ class ApiClient {
     try {
       final response = await _dio.get(path, queryParameters: queryParameters);
       return parser != null ? parser(response.data) : response.data as T;
+    } on DioException catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Authenticated binary download (e.g. a PDF invoice). Returns the raw bytes
+  /// using the same base URL + auth interceptors as every other call.
+  Future<List<int>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        path,
+        queryParameters: queryParameters,
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return response.data ?? const <int>[];
     } on DioException catch (e) {
       throw _handleError(e);
     }
