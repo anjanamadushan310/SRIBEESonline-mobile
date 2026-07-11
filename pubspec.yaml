@@ -49,6 +49,9 @@ dependencies:
 
   # Cupertino Icons
   cupertino_icons: ^1.0.8
+  # Disk+memory caching for remote images (category tiles, product photos).
+  # Without it every home-screen scroll re-downloads the same images.
+  cached_network_image: ^3.4.1
 
 dev_dependencies:
   flutter_test:

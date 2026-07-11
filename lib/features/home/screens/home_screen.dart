@@ -7,12 +7,15 @@
 /// open as pushed routes on top of the shell.
 library;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/sribees_design.dart';
+import '../../../core/api/categories_api.dart';
 import '../../../core/providers/branch_provider.dart';
 import '../../../core/providers/cart_provider.dart';
+import '../../../core/providers/category_provider.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../products/models/product_model.dart';
 import '../../products/screens/search_screen.dart';
@@ -77,27 +80,12 @@ class HomeScreen extends ConsumerWidget {
 // Deal data (gradient placeholders, mirrors the prototype)
 // ---------------------------------------------------------------------------
 
-class _Category {
-  final String name;
-  final IconData icon;
-  final Color iconColor;
-  final Color a;
-  final Color b;
-  const _Category(this.name, this.icon, this.iconColor, this.a, this.b);
-}
-
-const _categories = <_Category>[
-  _Category('Agro', Icons.eco_outlined, Color(0xFF3F7A2C), Color(0xFFCFE8C0),
-      Color(0xFFA6D68F)),
-  _Category('Groceries', Icons.shopping_bag_outlined, Color(0xFFA06B1A),
-      Color(0xFFF2DCB4), Color(0xFFE3BF80)),
-  _Category('Electronics', Icons.devices_other_outlined, Color(0xFF4A5A72),
-      Color(0xFFCDD6E2), Color(0xFFA5B2C4)),
-  _Category('Express', Icons.delivery_dining_outlined, kMagenta,
-      Color(0xFFFBD9E6), Color(0xFFF4B3CD)),
-  _Category('Meat', Icons.kebab_dining_outlined, Color(0xFFB0463F),
-      Color(0xFFF0C0BD), Color(0xFFDD8E88)),
-];
+// Categories are fetched live from the backend (topLevelCategoriesProvider) and
+// rendered from their admin-uploaded image_url. The hardcoded list that used to
+// live here — Agro / Groceries / Electronics / Express / Meat, each with a local
+// icon and gradient — has been removed: it had no relationship to the catalog
+// the admins actually curate, so tapping a tile could open a category that did
+// not exist.
 
 class _Banner {
   final String title;
@@ -572,56 +560,169 @@ class _BannerSlide extends StatelessWidget {
 // Category row
 // ---------------------------------------------------------------------------
 
-class _CategoryRow extends StatelessWidget {
-  final ValueChanged<_Category> onTap;
+/// "Shop by Category" — live top-level categories with their admin-uploaded
+/// tile images.
+class _CategoryRow extends ConsumerWidget {
+  final ValueChanged<CategoryItem> onTap;
   const _CategoryRow({required this.onTap});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final categories = ref.watch(topLevelCategoriesProvider);
+
     return SizedBox(
       height: 98,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.zero,
-        itemCount: _categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 16),
-        itemBuilder: (_, i) {
-          final c = _categories[i];
-          return GestureDetector(
-            onTap: () => onTap(c),
-            behavior: HitTestBehavior.opaque,
-            child: SizedBox(
-              width: 66,
-              child: Column(
-                children: [
-                  Container(
-                    width: 66,
-                    height: 66,
-                    decoration: BoxDecoration(
-                      gradient: swatch(c.a, c.b),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.5),
-                          width: 1.5),
-                    ),
-                    child: Icon(c.icon, color: c.iconColor, size: 30),
+      child: categories.when(
+        loading: () => const _CategorySkeleton(),
+        // A failed category fetch must not take the whole home screen down —
+        // Quick Sale and the rest of the page are still perfectly usable.
+        error: (_, __) => _CategoryMessage(
+          message: 'Categories unavailable',
+          onRetry: () => ref.invalidate(topLevelCategoriesProvider),
+        ),
+        data: (list) {
+          if (list.isEmpty) {
+            return const _CategoryMessage(message: 'No categories yet');
+          }
+          return ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: EdgeInsets.zero,
+            itemCount: list.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 16),
+            itemBuilder: (_, i) {
+              final c = list[i];
+              return GestureDetector(
+                onTap: () => onTap(c),
+                behavior: HitTestBehavior.opaque,
+                child: SizedBox(
+                  width: 66,
+                  child: Column(
+                    children: [
+                      _CategoryTile(category: c),
+                      const SizedBox(height: 9),
+                      Text(
+                        c.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: kInk2),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 9),
-                  Text(
-                    c.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: kInk2),
-                  ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           );
         },
+      ),
+    );
+  }
+}
+
+/// The 66×66 rounded tile. Falls back to a neutral placeholder when a category
+/// has no image yet, so the row keeps its shape instead of collapsing.
+class _CategoryTile extends StatelessWidget {
+  final CategoryItem category;
+  const _CategoryTile({required this.category});
+
+  static const _radius = 18.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final decoration = BoxDecoration(
+      borderRadius: BorderRadius.circular(_radius),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1.5),
+      color: const Color(0xFFF1EDF3),
+    );
+
+    if (!category.hasImage) {
+      return Container(
+        width: 66,
+        height: 66,
+        decoration: decoration,
+        child: const Icon(Icons.category_outlined, color: kInk2, size: 28),
+      );
+    }
+
+    return Container(
+      width: 66,
+      height: 66,
+      decoration: decoration,
+      clipBehavior: Clip.antiAlias,
+      child: CachedNetworkImage(
+        imageUrl: category.imageUrl!,
+        fit: BoxFit.cover,
+        // Cache at the size actually drawn — a full-resolution upload would
+        // otherwise sit decoded in memory at many times the pixels needed.
+        memCacheWidth: 200,
+        placeholder: (_, __) => const ColoredBox(color: Color(0xFFF1EDF3)),
+        errorWidget: (_, __, ___) =>
+            const Icon(Icons.broken_image_outlined, color: kInk2, size: 26),
+      ),
+    );
+  }
+}
+
+/// Shimmer-free loading placeholder that reserves the row's exact height.
+class _CategorySkeleton extends StatelessWidget {
+  const _CategorySkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      itemCount: 5,
+      separatorBuilder: (_, __) => const SizedBox(width: 16),
+      itemBuilder: (_, __) => Column(
+        children: [
+          Container(
+            width: 66,
+            height: 66,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1EDF3),
+              borderRadius: BorderRadius.circular(18),
+            ),
+          ),
+          const SizedBox(height: 9),
+          Container(
+            width: 44,
+            height: 10,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1EDF3),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Empty / error state for the category strip.
+class _CategoryMessage extends StatelessWidget {
+  final String message;
+  final VoidCallback? onRetry;
+  const _CategoryMessage({required this.message, this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            message,
+            style: const TextStyle(fontSize: 13, color: kInk2),
+          ),
+          if (onRetry != null)
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
       ),
     );
   }
