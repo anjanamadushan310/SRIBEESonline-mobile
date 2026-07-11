@@ -96,9 +96,14 @@ class _AddressSelectionScreenState
   // Authenticated list state
   List<Map<String, dynamic>> _addresses = [];
   bool _loading = true;
-  String? _error;
+  String? _error; // failed to LOAD the address list → full-screen error
   String? _selectedAddressId; // radio selection
   String? _resolvingId;
+
+  /// Failed to RESOLVE a branch. Kept separate from [_error]: the list itself
+  /// loaded fine, so we show an inline banner and leave the user on the screen
+  /// to pick a different area, rather than blanking the page.
+  String? _resolveError;
 
   // Guest form state — options come from the backend directory, not constants.
   String? _guestProvince;
@@ -232,7 +237,10 @@ class _AddressSelectionScreenState
       return;
     }
 
-    setState(() => _resolvingId = id);
+    setState(() {
+      _resolvingId = id;
+      _resolveError = null;
+    });
 
     try {
       final branchNotifier = ref.read(branchProvider.notifier);
@@ -243,23 +251,39 @@ class _AddressSelectionScreenState
       invalidateBranchScopedProducts(ref);
       pushAndClearFade(context, HomeScreen(branchName: branchName));
     } catch (e) {
-      // Branch resolution failed — no branches configured yet in DB.
-      // Save a default local branch so the user can proceed to home screen.
+      // Fail fast. A branch we could not resolve must NOT be papered over with a
+      // placeholder: the whole catalog is branch-scoped, so sending the user to
+      // Home with a made-up branch just moves the failure somewhere less
+      // explainable. Keep them here and say what went wrong.
       if (!mounted) return;
-      try {
-        final fallback = BranchContext(
-          branchId: 'default',
-          branchName: 'Main Branch',
-        );
-        await ref.read(branchProvider.notifier).setBranch(fallback);
-        if (!mounted) return;
-        invalidateBranchScopedProducts(ref);
-        pushAndClearFade(context, HomeScreen(branchName: fallback.branchName));
-      } catch (_) {
-        setState(() => _resolvingId = null);
-        _showError('Could not connect. Please check your internet connection.');
-      }
+      final message = _resolutionMessage(e);
+      setState(() {
+        _resolvingId = null;
+        _resolveError = message;
+      });
+      _showError(message);
     }
+  }
+
+  /// Turn a failed branch resolution into something the user can act on.
+  ///
+  /// "We don't deliver there yet" and "your connection dropped" call for
+  /// different responses, and the backend already distinguishes them: an
+  /// unmapped post office comes back 404, everything else is a transport or
+  /// server fault.
+  String _resolutionMessage(Object error) {
+    if (error is ApiException) {
+      if (error.statusCode == 404) {
+        return 'Delivery is currently unavailable for this location. '
+            'Please choose a different delivery area.';
+      }
+      if (error.statusCode != null && error.statusCode! >= 500) {
+        return 'Branch resolution failed — our server is having trouble. '
+            'Please try again in a moment.';
+      }
+      return error.message;
+    }
+    return 'Could not reach the server. Check your connection and try again.';
   }
 
   void _openEditAddress(Map<String, dynamic> address) {
@@ -310,7 +334,10 @@ class _AddressSelectionScreenState
     final province = _guestProvince!.trim();
     final district = _guestDistrict!.trim();
     final postOffice = _guestPostOffice!.trim();
-    setState(() => _guestSubmitting = true);
+    setState(() {
+      _guestSubmitting = true;
+      _resolveError = null;
+    });
 
     try {
       final notifier = ref.read(branchProvider.notifier);
@@ -323,25 +350,14 @@ class _AddressSelectionScreenState
       invalidateBranchScopedProducts(ref);
       pushAndClearFade(context, HomeScreen(branchName: branch.branchName));
     } catch (e) {
-      // Branch resolution failed — no branches configured yet in DB.
-      // Save a default local branch so the user can proceed to home screen.
+      // Fail fast — see _onConfirmAddress. No placeholder branch.
       if (!mounted) return;
-      try {
-        final fallback = BranchContext(
-          branchId: 'default',
-          branchName: 'Main Branch',
-          province: province,
-          district: district,
-          postOffice: postOffice,
-        );
-        await ref.read(branchProvider.notifier).setBranch(fallback);
-        if (!mounted) return;
-        invalidateBranchScopedProducts(ref);
-        pushAndClearFade(context, HomeScreen(branchName: fallback.branchName));
-      } catch (_) {
-        setState(() => _guestSubmitting = false);
-        _showError('Could not connect. Please check your internet connection.');
-      }
+      final message = _resolutionMessage(e);
+      setState(() {
+        _guestSubmitting = false;
+        _resolveError = message;
+      });
+      _showError(message);
     }
   }
 
@@ -456,9 +472,41 @@ class _AddressSelectionScreenState
     );
   }
 
+  /// Inline, persistent banner for a failed branch resolution. A snackbar alone
+  /// vanishes after a few seconds; this keeps the reason on screen while the
+  /// user picks a different area.
+  Widget _buildResolveErrorBanner(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.location_off_rounded, color: Colors.red[700]),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _resolveError!,
+              style: TextStyle(color: Colors.red[800]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAddressList(ThemeData theme) {
     return Column(
       children: [
+        if (_resolveError != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            child: _buildResolveErrorBanner(theme),
+          ),
         Expanded(
           child: ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -633,6 +681,7 @@ class _AddressSelectionScreenState
             ),
           ),
         ],
+        if (_resolveError != null) _buildResolveErrorBanner(theme),
         // Live Province → District → Post Office cascade.
         LocationCascadeSelector(
           selectedProvince: _guestProvince,

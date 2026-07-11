@@ -1,8 +1,14 @@
 # =============================================================================
 # SRIBEESonline — Flutter Android APK Builder
 #
-# Triggers on push of tags (e.g. v1.0.0) or can be triggered manually via
+# Triggers on every push to `main`, on a version tag (v1.0.0), or manually via
 # the GitHub Actions "Run workflow" button.
+#
+# NOTE ON PATHS: in this standalone repository the Flutter project IS the repo
+# root — pubspec.yaml sits at the top level. The previous version of this file
+# was carried over from the monorepo layout and ran `cd mobile` in every step,
+# which cannot work here: there is no `mobile/` directory to descend into. The
+# steps below therefore run at the root, and the artifact path drops the prefix.
 #
 # Outputs:
 #   Downloadable 'app-release.apk' run artifact
@@ -12,6 +18,8 @@ name: Build Flutter Android APK
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
@@ -41,25 +49,26 @@ jobs:
         run: flutter doctor -v
 
       - name: Fetch Flutter Dependencies
-        run: |
-          cd mobile
-          flutter pub get
+        run: flutter pub get
 
-      # Uncomment the block below if you need code generation (e.g. build_runner for freezed)
+      - name: Analyze
+        # Surfaces a compile error in seconds rather than after a long Gradle
+        # build. Infos/warnings are pre-existing across the app, so only genuine
+        # errors fail the run.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
       - name: Run Build Runner / Code Generation
-        run: |
-          cd mobile
-          flutter pub run build_runner build --delete-conflicting-outputs || echo "Proceeding without build_runner..."
+        # freezed/json_serializable outputs are committed, so this is a
+        # consistency check rather than a hard requirement.
+        run: flutter pub run build_runner build --delete-conflicting-outputs || echo "Proceeding without build_runner..."
 
       - name: Build Release APK
-        run: |
-          cd mobile
-          flutter build apk --release
+        run: flutter build apk --release
 
       - name: Upload APK Release Artifact
         uses: actions/upload-artifact@v4
         with:
           name: sribeesonline-app-release
-          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 7
           if-no-files-found: error
