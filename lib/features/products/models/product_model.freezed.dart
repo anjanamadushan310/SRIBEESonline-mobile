@@ -25,9 +25,12 @@ mixin _$Product {
   String? get description => throw _privateConstructorUsedError;
   double get price => throw _privateConstructorUsedError;
   double? get salePrice => throw _privateConstructorUsedError;
+  double? get globalPrice => throw _privateConstructorUsedError;
   int get stockQuantity => throw _privateConstructorUsedError;
   String get categoryId => throw _privateConstructorUsedError;
   String? get categoryName => throw _privateConstructorUsedError;
+  String? get subcategoryId => throw _privateConstructorUsedError;
+  String? get subcategoryName => throw _privateConstructorUsedError;
   String? get brand => throw _privateConstructorUsedError;
   String? get sku => throw _privateConstructorUsedError;
   List<ProductImage> get images => throw _privateConstructorUsedError;
@@ -59,9 +62,12 @@ abstract class $ProductCopyWith<$Res> {
       String? description,
       double price,
       double? salePrice,
+      double? globalPrice,
       int stockQuantity,
       String categoryId,
       String? categoryName,
+      String? subcategoryId,
+      String? subcategoryName,
       String? brand,
       String? sku,
       List<ProductImage> images,
@@ -94,9 +100,12 @@ class _$ProductCopyWithImpl<$Res, $Val extends Product>
     Object? description = freezed,
     Object? price = null,
     Object? salePrice = freezed,
+    Object? globalPrice = freezed,
     Object? stockQuantity = null,
     Object? categoryId = null,
     Object? categoryName = freezed,
+    Object? subcategoryId = freezed,
+    Object? subcategoryName = freezed,
     Object? brand = freezed,
     Object? sku = freezed,
     Object? images = null,
@@ -129,6 +138,10 @@ class _$ProductCopyWithImpl<$Res, $Val extends Product>
           ? _value.salePrice
           : salePrice // ignore: cast_nullable_to_non_nullable
               as double?,
+      globalPrice: freezed == globalPrice
+          ? _value.globalPrice
+          : globalPrice // ignore: cast_nullable_to_non_nullable
+              as double?,
       stockQuantity: null == stockQuantity
           ? _value.stockQuantity
           : stockQuantity // ignore: cast_nullable_to_non_nullable
@@ -140,6 +153,14 @@ class _$ProductCopyWithImpl<$Res, $Val extends Product>
       categoryName: freezed == categoryName
           ? _value.categoryName
           : categoryName // ignore: cast_nullable_to_non_nullable
+              as String?,
+      subcategoryId: freezed == subcategoryId
+          ? _value.subcategoryId
+          : subcategoryId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      subcategoryName: freezed == subcategoryName
+          ? _value.subcategoryName
+          : subcategoryName // ignore: cast_nullable_to_non_nullable
               as String?,
       brand: freezed == brand
           ? _value.brand
@@ -198,9 +219,12 @@ abstract class _$$ProductImplCopyWith<$Res> implements $ProductCopyWith<$Res> {
       String? description,
       double price,
       double? salePrice,
+      double? globalPrice,
       int stockQuantity,
       String categoryId,
       String? categoryName,
+      String? subcategoryId,
+      String? subcategoryName,
       String? brand,
       String? sku,
       List<ProductImage> images,
@@ -231,9 +255,12 @@ class __$$ProductImplCopyWithImpl<$Res>
     Object? description = freezed,
     Object? price = null,
     Object? salePrice = freezed,
+    Object? globalPrice = freezed,
     Object? stockQuantity = null,
     Object? categoryId = null,
     Object? categoryName = freezed,
+    Object? subcategoryId = freezed,
+    Object? subcategoryName = freezed,
     Object? brand = freezed,
     Object? sku = freezed,
     Object? images = null,
@@ -266,6 +293,10 @@ class __$$ProductImplCopyWithImpl<$Res>
           ? _value.salePrice
           : salePrice // ignore: cast_nullable_to_non_nullable
               as double?,
+      globalPrice: freezed == globalPrice
+          ? _value.globalPrice
+          : globalPrice // ignore: cast_nullable_to_non_nullable
+              as double?,
       stockQuantity: null == stockQuantity
           ? _value.stockQuantity
           : stockQuantity // ignore: cast_nullable_to_non_nullable
@@ -277,6 +308,14 @@ class __$$ProductImplCopyWithImpl<$Res>
       categoryName: freezed == categoryName
           ? _value.categoryName
           : categoryName // ignore: cast_nullable_to_non_nullable
+              as String?,
+      subcategoryId: freezed == subcategoryId
+          ? _value.subcategoryId
+          : subcategoryId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      subcategoryName: freezed == subcategoryName
+          ? _value.subcategoryName
+          : subcategoryName // ignore: cast_nullable_to_non_nullable
               as String?,
       brand: freezed == brand
           ? _value.brand
@@ -331,9 +370,12 @@ class _$ProductImpl implements _Product {
       required this.description,
       required this.price,
       this.salePrice,
+      this.globalPrice,
       required this.stockQuantity,
       required this.categoryId,
       this.categoryName,
+      this.subcategoryId,
+      this.subcategoryName,
       this.brand,
       this.sku,
       final List<ProductImage> images = const [],
@@ -361,11 +403,17 @@ class _$ProductImpl implements _Product {
   @override
   final double? salePrice;
   @override
+  final double? globalPrice;
+  @override
   final int stockQuantity;
   @override
   final String categoryId;
   @override
   final String? categoryName;
+  @override
+  final String? subcategoryId;
+  @override
+  final String? subcategoryName;
   @override
   final String? brand;
   @override
@@ -405,7 +453,7 @@ class _$ProductImpl implements _Product {
 
   @override
   String toString() {
-    return 'Product(id: $id, name: $name, description: $description, price: $price, salePrice: $salePrice, stockQuantity: $stockQuantity, categoryId: $categoryId, categoryName: $categoryName, brand: $brand, sku: $sku, images: $images, variants: $variants, averageRating: $averageRating, reviewCount: $reviewCount, isFeatured: $isFeatured, isActive: $isActive, createdAt: $createdAt, updatedAt: $updatedAt)';
+    return 'Product(id: $id, name: $name, description: $description, price: $price, salePrice: $salePrice, globalPrice: $globalPrice, stockQuantity: $stockQuantity, categoryId: $categoryId, categoryName: $categoryName, subcategoryId: $subcategoryId, subcategoryName: $subcategoryName, brand: $brand, sku: $sku, images: $images, variants: $variants, averageRating: $averageRating, reviewCount: $reviewCount, isFeatured: $isFeatured, isActive: $isActive, createdAt: $createdAt, updatedAt: $updatedAt)';
   }
 
   @override
@@ -420,12 +468,18 @@ class _$ProductImpl implements _Product {
             (identical(other.price, price) || other.price == price) &&
             (identical(other.salePrice, salePrice) ||
                 other.salePrice == salePrice) &&
+            (identical(other.globalPrice, globalPrice) ||
+                other.globalPrice == globalPrice) &&
             (identical(other.stockQuantity, stockQuantity) ||
                 other.stockQuantity == stockQuantity) &&
             (identical(other.categoryId, categoryId) ||
                 other.categoryId == categoryId) &&
             (identical(other.categoryName, categoryName) ||
                 other.categoryName == categoryName) &&
+            (identical(other.subcategoryId, subcategoryId) ||
+                other.subcategoryId == subcategoryId) &&
+            (identical(other.subcategoryName, subcategoryName) ||
+                other.subcategoryName == subcategoryName) &&
             (identical(other.brand, brand) || other.brand == brand) &&
             (identical(other.sku, sku) || other.sku == sku) &&
             const DeepCollectionEquality().equals(other._images, _images) &&
@@ -446,26 +500,30 @@ class _$ProductImpl implements _Product {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      id,
-      name,
-      description,
-      price,
-      salePrice,
-      stockQuantity,
-      categoryId,
-      categoryName,
-      brand,
-      sku,
-      const DeepCollectionEquality().hash(_images),
-      const DeepCollectionEquality().hash(_variants),
-      averageRating,
-      reviewCount,
-      isFeatured,
-      isActive,
-      createdAt,
-      updatedAt);
+  int get hashCode => Object.hashAll([
+        runtimeType,
+        id,
+        name,
+        description,
+        price,
+        salePrice,
+        globalPrice,
+        stockQuantity,
+        categoryId,
+        categoryName,
+        subcategoryId,
+        subcategoryName,
+        brand,
+        sku,
+        const DeepCollectionEquality().hash(_images),
+        const DeepCollectionEquality().hash(_variants),
+        averageRating,
+        reviewCount,
+        isFeatured,
+        isActive,
+        createdAt,
+        updatedAt
+      ]);
 
   /// Create a copy of Product
   /// with the given fields replaced by the non-null parameter values.
@@ -490,9 +548,12 @@ abstract class _Product implements Product {
       required final String? description,
       required final double price,
       final double? salePrice,
+      final double? globalPrice,
       required final int stockQuantity,
       required final String categoryId,
       final String? categoryName,
+      final String? subcategoryId,
+      final String? subcategoryName,
       final String? brand,
       final String? sku,
       final List<ProductImage> images,
@@ -517,11 +578,17 @@ abstract class _Product implements Product {
   @override
   double? get salePrice;
   @override
+  double? get globalPrice;
+  @override
   int get stockQuantity;
   @override
   String get categoryId;
   @override
   String? get categoryName;
+  @override
+  String? get subcategoryId;
+  @override
+  String? get subcategoryName;
   @override
   String? get brand;
   @override

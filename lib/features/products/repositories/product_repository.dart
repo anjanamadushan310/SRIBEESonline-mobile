@@ -63,11 +63,21 @@ class ProductRepository extends BaseRepository with OfflineCapable {
   }
 
   /// Get products with filtering and pagination (GET /products).
+  ///
+  /// The branch is **not** passed from the client: the backend resolves it from
+  /// the caller's session (set via /session/set-location) and merges each
+  /// product's branch override over the global catalog before responding. That
+  /// keeps a client from shopping a branch it hasn't been routed to — so the
+  /// prices and stock in the response are already branch-correct.
+  ///
+  /// `categoryId` matches the category and everything under its
+  /// sub-categories; `subcategoryId` narrows to one leaf.
   Future<ProductListResult> getProducts({
     int page = 1,
     int pageSize = 20,
     String? query,
     String? categoryId,
+    String? subcategoryId,
     double? minPrice,
     double? maxPrice,
     bool? inStock,
@@ -83,6 +93,7 @@ class ProductRepository extends BaseRepository with OfflineCapable {
 
     if (query != null && query.isNotEmpty) queryParams['search'] = query;
     if (categoryId != null) queryParams['category_id'] = categoryId;
+    if (subcategoryId != null) queryParams['subcategory_id'] = subcategoryId;
     if (minPrice != null) queryParams['min_price'] = minPrice;
     if (maxPrice != null) queryParams['max_price'] = maxPrice;
     if (isFeatured != null) queryParams['is_featured'] = isFeatured;
