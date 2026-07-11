@@ -13,11 +13,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
-import '../../../core/api/locations_api.dart';
 import '../../../core/navigation/routes.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/branch_provider.dart';
 import '../../home/screens/home_screen.dart';
+import '../widgets/location_cascade_selector.dart';
 
 // Maroon / Green grocery theme
 const _maroon = Color(0xFF6B2D5C);
@@ -51,17 +51,11 @@ class AddressFormScreen extends ConsumerStatefulWidget {
 class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  List<ProvinceItem> _provinces = [];
-  List<DistrictItem> _districts = [];
-  List<PostOfficeItem> _postOffices = [];
-
   String? _selectedProvince;
   String? _selectedDistrict;
   String? _selectedPostOffice;
+  String? _servingBranchName;
 
-  bool _loadingProvinces = true;
-  bool _loadingDistricts = false;
-  bool _loadingPostOffices = false;
   bool _submitting = false;
   bool _deleting = false;
   String? _error;
@@ -74,6 +68,9 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
   @override
   void initState() {
     super.initState();
+    // In edit mode these seed the cascade. LocationCascadeSelector fetches each
+    // level and drops a selection that is no longer covered, so a stale value
+    // degrades to "please re-pick" instead of crashing the dropdown.
     _selectedProvince = widget.initialProvince;
     _selectedDistrict = widget.initialDistrict;
     _selectedPostOffice = widget.initialPostOffice;
@@ -81,7 +78,6 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
         TextEditingController(text: widget.initialAddressLine1 ?? '');
     _addressLine2Controller =
         TextEditingController(text: widget.initialAddressLine2 ?? '');
-    _loadProvinces();
   }
 
   @override
@@ -89,110 +85,6 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
     _addressLine1Controller.dispose();
     _addressLine2Controller.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadProvinces() async {
-    setState(() {
-      _loadingProvinces = true;
-      _error = null;
-    });
-    try {
-      final api = ref.read(apiClientProvider);
-      final list = await fetchProvinces(api);
-      if (!mounted) return;
-      setState(() {
-        _provinces = list;
-        _loadingProvinces = false;
-        if (_selectedProvince != null && !list.any((p) => p.province == _selectedProvince)) {
-          _selectedProvince = null;
-          _selectedDistrict = null;
-          _selectedPostOffice = null;
-          _districts = [];
-          _postOffices = [];
-        } else if (_selectedProvince != null) {
-          _loadDistricts();
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadingProvinces = false;
-        _error = 'Failed to load provinces. Please try again.';
-      });
-    }
-  }
-
-  Future<void> _loadDistricts() async {
-    final province = _selectedProvince;
-    if (province == null || province.isEmpty) {
-      setState(() {
-        _districts = [];
-        _postOffices = [];
-        _selectedDistrict = null;
-        _selectedPostOffice = null;
-      });
-      return;
-    }
-    setState(() {
-      _loadingDistricts = true;
-      _districts = [];
-      _postOffices = [];
-      _selectedDistrict = null;
-      _selectedPostOffice = null;
-    });
-    try {
-      final api = ref.read(apiClientProvider);
-      final list = await fetchDistricts(api, province);
-      if (!mounted) return;
-      setState(() {
-        _districts = list;
-        _loadingDistricts = false;
-        if (widget.initialDistrict != null && list.any((d) => d.district == widget.initialDistrict)) {
-          _selectedDistrict = widget.initialDistrict;
-          _loadPostOffices();
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadingDistricts = false;
-        _error = 'Failed to load districts.';
-      });
-    }
-  }
-
-  Future<void> _loadPostOffices() async {
-    final district = _selectedDistrict;
-    if (district == null || district.isEmpty) {
-      setState(() {
-        _postOffices = [];
-        _selectedPostOffice = null;
-      });
-      return;
-    }
-    setState(() {
-      _loadingPostOffices = true;
-      _postOffices = [];
-      _selectedPostOffice = null;
-    });
-    try {
-      final api = ref.read(apiClientProvider);
-      final list = await fetchPostOffices(api, district);
-      if (!mounted) return;
-      setState(() {
-        _postOffices = list;
-        _loadingPostOffices = false;
-        if (widget.initialPostOffice != null && list.any((p) => p.postOffice == widget.initialPostOffice)) {
-          _selectedPostOffice = widget.initialPostOffice;
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadingPostOffices = false;
-        _error = 'Failed to load post offices.';
-      });
-    }
   }
 
   Future<void> _submit() async {
@@ -436,72 +328,49 @@ class _AddressFormScreenState extends ConsumerState<AddressFormScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Province
-            DropdownButtonFormField<String>(
-              value: _selectedProvince,
-              decoration: _inputDecoration('Province'),
-              hint: Text(_loadingProvinces ? 'Loading...' : 'Select Province'),
-              items: _provinces
-                  .map((p) => DropdownMenuItem(value: p.province, child: Text(p.province)))
-                  .toList(),
-              onChanged: _loadingProvinces
-                  ? null
-                  : (v) {
-                      setState(() {
-                        _selectedProvince = v;
-                        _selectedDistrict = null;
-                        _selectedPostOffice = null;
-                        _districts = [];
-                        _postOffices = [];
-                      });
-                      if (v != null && v.isNotEmpty) _loadDistricts();
-                    },
+            // Live Province → District → Post Office cascade.
+            LocationCascadeSelector(
+              selectedProvince: _selectedProvince,
+              selectedDistrict: _selectedDistrict,
+              selectedPostOffice: _selectedPostOffice,
+              enabled: !_submitting && !_deleting,
+              decorationBuilder: _inputDecoration,
+              // Changing a level invalidates everything below it — a district
+              // from the old province would resolve to the wrong branch.
+              onProvinceChanged: (v) => setState(() {
+                _selectedProvince = v;
+                _selectedDistrict = null;
+                _selectedPostOffice = null;
+                _servingBranchName = null;
+              }),
+              onDistrictChanged: (v) => setState(() {
+                _selectedDistrict = v;
+                _selectedPostOffice = null;
+                _servingBranchName = null;
+              }),
+              onPostOfficeChanged: (po, branchName) => setState(() {
+                _selectedPostOffice = po;
+                _servingBranchName = branchName;
+              }),
             ),
-            const SizedBox(height: 16),
-
-            // District
-            DropdownButtonFormField<String>(
-              value: _selectedDistrict,
-              decoration: _inputDecoration('District'),
-              hint: Text(
-                _loadingDistricts
-                    ? 'Loading...'
-                    : _selectedProvince == null
-                        ? 'Select Province first'
-                        : 'Select District',
+            if (_servingBranchName != null && _servingBranchName!.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.storefront_rounded, size: 18, color: _green),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Delivered by $_servingBranchName',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: _green,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              items: _districts
-                  .map((d) => DropdownMenuItem(value: d.district, child: Text(d.district)))
-                  .toList(),
-              onChanged: (_loadingDistricts || _selectedProvince == null)
-                  ? null
-                  : (v) {
-                      setState(() {
-                        _selectedDistrict = v;
-                        _selectedPostOffice = null;
-                        _postOffices = [];
-                      });
-                      if (v != null && v.isNotEmpty) _loadPostOffices();
-                    },
-            ),
-            const SizedBox(height: 16),
-
-            // Post Office
-            DropdownButtonFormField<String>(
-              value: _selectedPostOffice,
-              decoration: _inputDecoration('Post Office'),
-              hint: Text(
-                _loadingPostOffices
-                    ? 'Loading...'
-                    : _selectedDistrict == null
-                        ? 'Select District first'
-                        : 'Select Post Office',
-              ),
-              items: _postOffices
-                  .map((p) => DropdownMenuItem(value: p.postOffice, child: Text(p.postOffice)))
-                  .toList(),
-              onChanged: (_loadingPostOffices || _selectedDistrict == null) ? null : (v) => setState(() => _selectedPostOffice = v),
-            ),
+            ],
             const SizedBox(height: 16),
 
             // Address lines (persisted for authenticated users)

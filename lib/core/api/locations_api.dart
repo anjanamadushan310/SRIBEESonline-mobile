@@ -52,15 +52,23 @@ class DistrictItem {
 }
 
 /// Single post office from GET /locations/post-offices.
+///
+/// The endpoint also returns the branch that serves this post office, which is
+/// the whole point of the hyperlocal model: picking a post office is what
+/// selects the branch a customer shops from.
 class PostOfficeItem {
   final String postOffice;
   final String district;
   final String province;
+  final String branchId;
+  final String branchName;
 
   PostOfficeItem({
     required this.postOffice,
     required this.district,
     required this.province,
+    this.branchId = '',
+    this.branchName = '',
   });
 
   factory PostOfficeItem.fromJson(Map<String, dynamic> json) {
@@ -68,6 +76,8 @@ class PostOfficeItem {
       postOffice: json['postOffice'] as String? ?? json['post_office'] as String? ?? '',
       district: json['district'] as String? ?? '',
       province: json['province'] as String? ?? '',
+      branchId: (json['branchId'] ?? json['branch_id'] ?? '').toString(),
+      branchName: (json['branchName'] ?? json['branch_name'] ?? '').toString(),
     );
   }
 }

@@ -16,16 +16,17 @@ import '../../../core/providers/branch_provider.dart';
 import '../../../core/providers/language_provider.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../home/screens/home_screen.dart';
+import '../widgets/location_cascade_selector.dart';
 import 'address_form_screen.dart';
 
 // Maroon / Green grocery theme
 const _maroon = Color(0xFF6B2D5C);
 const _green = Color(0xFF2D5C4A);
 
-// Static data for guest address form (Western Province → Kalutara → 3 POs)
-const _westernProvince = 'Western Province';
-const _kalutara = 'Kalutara';
-const _postOfficeOptions = ['Welipenna', 'Mathugama', 'Meegahathanna'];
+// Coverage (Province → District → Post Office) is fetched live from the backend
+// Post Office directory via LocationCascadeSelector. It is deliberately NOT
+// hardcoded here: an admin mapping a new area must show up in the app without a
+// release.
 
 // Localized labels for guest form (en, si, ta)
 const _guestFormCopy = {
@@ -99,10 +100,11 @@ class _AddressSelectionScreenState
   String? _selectedAddressId; // radio selection
   String? _resolvingId;
 
-  // Guest form state (static data: Western Province → Kalutara → 3 POs)
+  // Guest form state — options come from the backend directory, not constants.
   String? _guestProvince;
   String? _guestDistrict;
   String? _guestPostOffice;
+  String? _guestBranchName; // serving branch for the chosen post office
   bool _guestSubmitting = false;
   final _guestAddressLine1Controller = TextEditingController();
   final _guestAddressLine2Controller = TextEditingController();
@@ -124,18 +126,10 @@ class _AddressSelectionScreenState
     final isAuth = ref.read(isAuthenticatedProvider);
     if (isAuth) {
       _fetchAddresses();
-    } else {
-      _initGuestFormData();
     }
-  }
-
-  /// Initialize guest form with default Province/District and static Post Office list.
-  void _initGuestFormData() {
-    setState(() {
-      _guestProvince = _westernProvince;
-      _guestDistrict = _kalutara;
-      _guestPostOffice = null;
-    });
+    // Guests need no seeding: the cascade starts empty and LocationCascadeSelector
+    // loads the real provinces. Pre-selecting a province/district here is what
+    // used to lock every guest into one hardcoded area.
   }
 
   String _t(String? code, String key) {
@@ -639,38 +633,57 @@ class _AddressSelectionScreenState
             ),
           ),
         ],
-        // Province: default Western Province only (others "Coming Soon" — not selectable)
-        DropdownButtonFormField<String>(
-          value: _guestProvince,
-          decoration: _guestInputDecoration(_t(langCode, 'province')),
-          hint: Text(_t(langCode, 'selectProvince')),
-          items: [
-            DropdownMenuItem(value: _westernProvince, child: Text(_westernProvince)),
-          ],
-          onChanged: (v) => setState(() => _guestProvince = v),
+        // Live Province → District → Post Office cascade.
+        LocationCascadeSelector(
+          selectedProvince: _guestProvince,
+          selectedDistrict: _guestDistrict,
+          selectedPostOffice: _guestPostOffice,
+          enabled: !_guestSubmitting,
+          decorationBuilder: _guestInputDecoration,
+          labels: LocationCascadeLabels(
+            province: _t(langCode, 'province'),
+            district: _t(langCode, 'district'),
+            postOffice: _t(langCode, 'postOffice'),
+            selectProvince: _t(langCode, 'selectProvince'),
+            selectDistrict: _t(langCode, 'selectDistrict'),
+            selectPostOffice: _t(langCode, 'selectPostOffice'),
+          ),
+          // Changing a level invalidates everything below it — a district from
+          // the old province would resolve to the wrong branch (or none).
+          onProvinceChanged: (v) => setState(() {
+            _guestProvince = v;
+            _guestDistrict = null;
+            _guestPostOffice = null;
+            _guestBranchName = null;
+          }),
+          onDistrictChanged: (v) => setState(() {
+            _guestDistrict = v;
+            _guestPostOffice = null;
+            _guestBranchName = null;
+          }),
+          onPostOfficeChanged: (po, branchName) => setState(() {
+            _guestPostOffice = po;
+            _guestBranchName = branchName;
+          }),
         ),
-        const SizedBox(height: 16),
-        // District: default Kalutara
-        DropdownButtonFormField<String>(
-          value: _guestDistrict,
-          decoration: _guestInputDecoration(_t(langCode, 'district')),
-          hint: Text(_t(langCode, 'selectDistrict')),
-          items: [
-            DropdownMenuItem(value: _kalutara, child: Text(_kalutara)),
-          ],
-          onChanged: (v) => setState(() => _guestDistrict = v),
-        ),
-        const SizedBox(height: 16),
-        // Post Office: Welipenna, Mathugama, Meegahathanna
-        DropdownButtonFormField<String>(
-          value: _guestPostOffice,
-          decoration: _guestInputDecoration(_t(langCode, 'postOffice')),
-          hint: Text(_t(langCode, 'selectPostOffice')),
-          items: _postOfficeOptions
-              .map((po) => DropdownMenuItem(value: po, child: Text(po)))
-              .toList(),
-          onChanged: (v) => setState(() => _guestPostOffice = v),
-        ),
+        if (_guestBranchName != null && _guestBranchName!.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(Icons.storefront_rounded, size: 18, color: _green),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Delivered by $_guestBranchName',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: _green,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 16),
         TextFormField(
           controller: _guestAddressLine1Controller,
